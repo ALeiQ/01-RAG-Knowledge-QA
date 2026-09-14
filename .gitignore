@@ -1,2 +1,24 @@
+# Environment
+.env
+
+# Python
 __pycache__/
 *.pyc
+*.egg-info/
+dist/
+build/
+
+# Caches
+.pytest_cache/
+.ruff_cache/
+
+# Data
+data/
+qdrant_data/
+
+# Virtual environments
+venv/
+.venv/
+
+# OS
+.DS_Store
