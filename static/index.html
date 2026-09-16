@@ -186,9 +186,10 @@
                         type="button"
                         x-show="loading"
                         @click="stopQuery()"
-                        class="btn-stop text-white px-6 py-3 rounded-xl text-sm font-medium"
+                        :disabled="stopClicked"
+                        class="btn-stop text-white px-5 py-3 rounded-lg text-sm font-semibold select-none cursor-pointer disabled:opacity-70"
                     >
-                        ⏹ 停止
+                        <span class="stop-ico">⏹</span><span x-text="stopClicked ? '停止中…' : '停止'"></span>
                     </button>
                     <button
                         type="submit"
@@ -690,6 +691,8 @@ function app() {
         dragSessionId: null,
         question: '',
         stopRequested: false,
+        stopClicked: false,
+        _activeReader: null,
         chatSessions: (() => {
             try {
                 const raw = localStorage.getItem('ragChatSessions');
@@ -1106,6 +1109,7 @@ function app() {
             this.question = '';
             sess.busy = true;
             this.stopRequested = false;
+            this.stopClicked = false;
 
             sess.messages.push({ role: 'assistant', content: '', sources: [], retrieved: [], question: q });
             const idx = sess.messages.length - 1;
@@ -1123,6 +1127,7 @@ function app() {
                 });
 
                 const reader = res.body.getReader();
+                this._activeReader = reader;
                 const decoder = new TextDecoder();
                 let buffer = '';
 
@@ -1163,14 +1168,17 @@ function app() {
 
             sess.busy = false;
             this.stopRequested = false;
+            this.stopClicked = false;
+            this._activeReader = null;
             this.saveChatSessions();
             this.scrollChatBottom();
         },
 
         async stopQuery() {
             const sess = this.activeSession();
-            if (!sess || !sess.busy) return;
+            if (!sess || !sess.busy || this.stopRequested) return;
             this.stopRequested = true;
+            this.stopClicked = true;
             try {
                 await fetch('/api/query/cancel', {
                     method: 'POST',
@@ -1178,6 +1186,12 @@ function app() {
                     body: JSON.stringify({ session_id: sess.id }),
                 });
             } catch (e) {}
+            // 兜底：若 8s 内未收到服务端终帧，本地强制断开流并收尾
+            setTimeout(() => {
+                if (this.stopRequested && this._activeReader) {
+                    this._activeReader.cancel('stop').catch(() => {});
+                }
+            }, 8000);
         },
 
         async runIngest(paths) {

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from collections.abc import Generator
 
 import requests as _requests
@@ -119,17 +121,65 @@ def answer_question_stream(
     full_answer = ""
     cancel.register(gen_id)
 
-    with _requests.post(
-        f"{OLLAMA_BASE}/api/chat",
-        json={
-            "model": get_current_model(),
-            "messages": _make_messages(context, question),
-            "options": {"temperature": 0, "num_ctx": 8192},
-            "stream": True,
-        },
-        stream=True,
-        timeout=300,
-    ) as resp:
+    # Ollama only sends response headers once the first token is ready, so a
+    # plain requests.post(...) would block the whole streaming generator during
+    # the (potentially long) prefill phase. Instead we fire the request from a
+    # daemon thread and poll an event so cancellation stays instant at any stage.
+    ready = threading.Event()
+    box: dict = {}
+    err_box: dict = {}
+
+    def _post() -> None:
+        try:
+            resp = _requests.post(
+                f"{OLLAMA_BASE}/api/chat",
+                json={
+                    "model": get_current_model(),
+                    "messages": _make_messages(context, question),
+                    "options": {"temperature": 0, "num_ctx": 8192},
+                    "stream": True,
+                },
+                stream=True,
+                timeout=300,
+            )
+            if cancel.is_cancelled(gen_id):
+                resp.close()
+                return
+            box["resp"] = resp
+            ready.set()
+        except Exception as exc:
+            err_box["exc"] = exc
+            ready.set()
+
+    threading.Thread(target=_post, daemon=True).start()
+    while not ready.is_set():
+        if cancel.is_cancelled(gen_id):
+            stopped = True
+            cancel.release(gen_id)
+            yield {
+                "type": "done",
+                "answer": full_answer,
+                "sources": sources,
+                "chunks_used": len(sources),
+                "retrieved": _chunk_details(chunks),
+                "stopped": True,
+            }
+            return
+        time.sleep(0.1)
+
+    if "exc" in err_box:
+        cancel.release(gen_id)
+        yield {
+            "type": "done",
+            "answer": "调用大模型失败，请稍后重试。",
+            "sources": sources,
+            "chunks_used": len(sources),
+            "retrieved": _chunk_details(chunks),
+            "stopped": False,
+        }
+        return
+
+    with box["resp"] as resp:
         cancel.attach(gen_id, resp)
         try:
             for line in resp.iter_lines():
