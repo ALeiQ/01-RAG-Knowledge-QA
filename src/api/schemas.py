@@ -11,6 +11,11 @@ class QueryRequest(BaseModel):
     question: str
     top_k: int = Field(default_factory=lambda: settings.top_k)
     collection: Optional[str] = None
+    session_id: Optional[str] = None
+
+
+class QueryCancelRequest(BaseModel):
+    session_id: str
 
 
 class QueryResponse(BaseModel):

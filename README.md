@@ -7,6 +7,7 @@
 - **混合检索**：dense（bge-m3 向量相似度）+ 关键词（Text 匹配加权）双路召回
 - **文件级去重**：top-k 检索保证「不同文件数 ≤ k」，同一文件最多保留 `chunks_per_file` 个高分 chunk，避免单个长文档垄断上下文
 - **流式问答**：`/api/query` SSE 流式输出，回答强制带 `[来源: 文件名]` 引用
+- **停止回答**：生成中可随时中断（`/api/query/cancel`），保留已生成的部分内容并释放模型算力
 - **增量导入**：按文件内容哈希去重（重复导入秒过），支持删除已删除文件、全量重建（recreate）
 - **导入进度**：导入/嵌入进度 SSE 轮询、取消导入
 - **集合管理**：多知识库切换、重命名、删除（本地 sqlite 持久化）
@@ -108,7 +109,8 @@ nohup /usr/bin/python3 run_server.py > /tmp/rag_server.log 2>&1 &
 
 | 方法 & 路径 | 说明 |
 | --- | --- |
-| `POST /api/query` | 流式问答（SSE：`{"type":"chunk","text":...}` / 结束时 `{"type":"done",...}`），body: `{question, top_k?, collection?}` |
+| `POST /api/query` | 流式问答（SSE：`{"type":"chunk","text":...}` / 结束时 `{"type":"done","stopped":bool,...}`），body: `{question, top_k?, collection?, session_id?}`；`session_id` 用于定位/取消本次生成 |
+| `POST /api/query/cancel` | 停止正在生成中的回答，body: `{session_id}`，返回 `{cancelled: bool}`；保留已输出的部分内容 |
 | `POST /api/ingest` | 导入，body: `{path?, paths?, recreate?, delete_missing?}`（阻塞至完成，返回统计） |
 | `GET /api/ingest/progress` / `POST /api/ingest/cancel` | 导入进度 / 取消 |
 | `GET /api/status` / `GET /api/config` | 状态 / 配置 |
@@ -125,6 +127,13 @@ nohup /usr/bin/python3 run_server.py > /tmp/rag_server.log 2>&1 &
    再从候选里为每个选中文件保留至多 `chunks_per_file` 个高分 chunk
 3. **上下文组装**（`src/qa/chain.py`）：chunk 按分数降序拼入，总字符预算 `MAX_CONTEXT_CHARS=4000` 截断（约 2000 token，防超 `num_ctx=8192`）；`chunks_used` 反映实际喂入数
 4. **回答**：仅基于检索到的 chunk 片段回答（不读整文件），`temperature=0`，强制标注 `[来源: 文件名]`
+
+### 停止回答
+
+- 回答生成期间，输入框发送按钮变为红色「⏹ 停止」；点击后前端调用 `POST /api/query/cancel`
+- 服务端维护生成注册表（`src/qa/cancel.py`）：每路生成（按 `session_id`）进入时就登记，拿到流式响应后挂载连接句柄；取消即置位「已取消」事件并关闭对 Ollama 的连接
+- Ollama 在客户端断开流时立即中止生成（不白白算完），前端收到终帧 `{"type":"done","stopped":true}` 后保留已生成的部分文本并标注「已手动停止」
+- 生成结束/异常时注册表自动释放；取消不存在的生成返回 `cancelled:false`
 
 > 说明：当前回复只使用检索到的 chunk 片段，不使用整文件内容。
 
@@ -147,6 +156,8 @@ ruff check src/
 
 - 本地 sqlite 模式（macOS sqlite 编译为 `THREADSAFE=2`）跨线程写入曾触发 `check_same_thread` 报错；`store.py` 已对所有写操作开启 `force_disable_check_same_thread=True` 并用模块级 `RLock` 串行化，导入与集合操作可并发触发
 - 大模型推理串行排队：同一时间只有一个会话在生成，其余会话的输入不阻塞（每会话瞬态 `busy` 状态）
+- 本机 qwen3:8b 首个 token 延迟约 20+ 秒（prefill 慢），回答生成流畅后取消可即时中断
+- `src/qa/cancel.py` 的注册表/取消逻辑有独立单元测试（`tests/test_cancel.py`）
 
 ## 脚本
 

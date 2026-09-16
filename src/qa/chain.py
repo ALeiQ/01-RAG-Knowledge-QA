@@ -5,6 +5,7 @@ from collections.abc import Generator
 import requests as _requests
 
 from src.config import settings
+from src.qa import cancel
 from src.qa.model_state import get_current_model
 from src.retrieval.hybrid import RetrievedChunk, search
 
@@ -97,7 +98,10 @@ def answer_question(
 
 
 def answer_question_stream(
-    question: str, top_k: int | None = None, collection_name: str | None = None
+    question: str,
+    top_k: int | None = None,
+    collection_name: str | None = None,
+    gen_id: str | None = None,
 ) -> Generator[dict, None, None]:
     chunks = search(question, top_k=top_k or settings.top_k, collection_name=collection_name)
     if not chunks:
@@ -111,6 +115,9 @@ def answer_question_stream(
         return
 
     sources, context = _build_context(chunks)
+    stopped = False
+    full_answer = ""
+    cancel.register(gen_id)
 
     with _requests.post(
         f"{OLLAMA_BASE}/api/chat",
@@ -123,15 +130,26 @@ def answer_question_stream(
         stream=True,
         timeout=300,
     ) as resp:
-        full_answer = ""
-        for line in resp.iter_lines():
-            if not line:
-                continue
-            data = __import__("json").loads(line)
-            if "message" in data and "content" in data["message"]:
-                text = data["message"]["content"]
-                full_answer += text
-                yield {"type": "chunk", "text": text}
+        cancel.attach(gen_id, resp)
+        try:
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                data = __import__("json").loads(line)
+                if "message" in data and "content" in data["message"]:
+                    text = data["message"]["content"]
+                    full_answer += text
+                    yield {"type": "chunk", "text": text}
+                if cancel.is_cancelled(gen_id):
+                    stopped = True
+                    break
+        except Exception:
+            if gen_id:
+                stopped = cancel.is_cancelled(gen_id)
+            else:
+                stopped = True
+        finally:
+            cancel.release(gen_id)
 
     yield {
         "type": "done",
@@ -139,4 +157,5 @@ def answer_question_stream(
         "sources": sources,
         "chunks_used": len(sources),
         "retrieved": _chunk_details(chunks),
+        "stopped": stopped,
     }

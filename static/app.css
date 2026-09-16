@@ -364,6 +364,14 @@ html[data-theme="light"] .tab-btn.tab-on { color: #0f172a; }
 .btn-send:not(:disabled):hover { box-shadow: 0 6px 18px var(--accent-soft); }
 .btn-send:not(:disabled):active { transform: scale(.97); }
 
+.btn-stop {
+    background: linear-gradient(135deg, #ef4444, #b91c1c);
+    box-shadow: 0 4px 14px rgba(239, 68, 68, .25);
+    transition: box-shadow .18s ease, transform .12s ease;
+}
+.btn-stop:hover { box-shadow: 0 6px 18px rgba(239, 68, 68, .35); }
+.btn-stop:active { transform: scale(.97); }
+
 .btn-ingest {
     background: linear-gradient(135deg, var(--ingest-1), var(--ingest-2));
     box-shadow: 0 4px 14px var(--accent-soft);
@@ -633,6 +641,7 @@ html[data-theme="light"] .src-chip { color: #334155 !important; }
 html[data-theme="light"] .src-chip:hover,
 html[data-theme="light"] .btn-send,
 html[data-theme="light"] .btn-ingest,
+html[data-theme="light"] .btn-stop,
 html[data-theme="light"] .app-logo { color: #fff !important; }
 html[data-theme="light"] .btn-ghost { color: #1e293b !important; }
 html[data-theme="light"] .text-green-400 { color: #15803d !important; }

@@ -24,6 +24,7 @@ from src.api.schemas import (
     ModelInfo,
     ModelSelectRequest,
     ModelsResponse,
+    QueryCancelRequest,
     QueryRequest,
     StatusResponse,
 )
@@ -39,6 +40,7 @@ from src.imports.store import list_files as list_session_files
 from src.ingest import progress as ingest_progress
 from src.ingest.loader import load_file
 from src.ingest.pipeline import ingest_paths
+from src.qa import cancel as generation_cancel
 from src.qa.chain import answer_question_stream
 from src.qa.model_state import get_current_model, set_current_model
 from src.vectorstore.naming import (
@@ -68,11 +70,20 @@ async def query(req: QueryRequest):
 
     def event_stream():
         for event in answer_question_stream(
-            req.question, top_k=req.top_k, collection_name=collection
+            req.question,
+            top_k=req.top_k,
+            collection_name=collection,
+            gen_id=req.session_id,
         ):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/query/cancel")
+async def cancel_query(req: QueryCancelRequest):
+    cancelled = generation_cancel.request_cancel(req.session_id)
+    return {"cancelled": cancelled}
 
 
 @router.post("/ingest", response_model=IngestResponse)
